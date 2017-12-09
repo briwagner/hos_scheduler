@@ -1,0 +1,4 @@
+name = HOS Scheduler
+description = Process appointments and generate reminder posts to individual users
+core = 7.x
+package = HOS

@@ -1,0 +1,145 @@
+<?php
+
+/**
+ * Add page for Scheduled Reminders form.
+ * 
+ * Implements hook_menu().
+ */
+function hos_scheduler_menu() {
+  $items = [];
+  $items['scheduler/import'] = [
+    'title' => 'Import scheduled reminders',
+    'description' => 'Form to import scheduled reminders and create SMS posts',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['hos_scheduler_form'],
+    'access callback' => TRUE
+  ];
+
+  return $items;
+}
+
+/**
+ * Create Scheduled Reminders form.
+ * 
+ * Implements hook_form().
+ */
+function hos_scheduler_form($form, &$form_state) {
+  $form['text_input'] = [
+    '#title' => t('CSV-type Data'),
+    '#description' => t('Paste CSV-style data to create reminders. The first line must contain column headers in order to properly match data. Each entry must be on a new line.'),
+    '#type' => 'textarea',
+    '#default_value' => '',
+    '#required' => TRUE,
+  ];
+
+  $form['data_separator'] = [
+    '#title' => t('Data separator'),
+    '#description' => t('Indicate whether data on each line is separated by a comma (,) or a pipe (|)'),
+    '#type' => 'select',
+    '#options' => [
+      ',' => 'Commas',
+      '|' => 'Pipes'
+    ],
+    '#empty_option' => '--Select a value--',
+    '#required' => TRUE,
+  ];
+
+  // $form['file_input'] = [];
+
+  $form['submit_button'] = [
+    '#type' => 'submit',
+    '#value' => t('Submit'),
+  ];
+  
+  return $form;
+}
+
+/**
+ * Implements hook_form_validate().
+ */
+function hos_scheduler_form_validate($form, &$form_state) {
+  // Get form values.
+  $textData = $form['text_input']['#value'];
+  $csvSeparator = $form['data_separator']['#value'];
+  
+  // Verify that data headers have relevant column names, i.e. phone, date.
+  $dataRows = str_getcsv($textData, "\n");
+  // Get column titles only.
+  $headers = explode($csvSeparator, $dataRows[0]);
+
+  // Validate for more than one row.
+  if (count($dataRows) <= 1) {
+    form_set_error('text_input', "Could not read the CSV data. Make sure each entry is contained on a separate line, and the column titles are included on the first line.");
+    return;
+  }
+  
+  // Cleanse data.
+  $headers = array_map('trim', $headers);
+  $headers = array_map('strtolower', $headers);
+
+  // First row of data should contain column titles, i.e. phone, name.
+  if ( !in_array('phone', $headers) ||
+       !in_array('name',  $headers) ||
+       !in_array('date',  $headers) ) {
+    form_set_error('text_input', 'Data must contain column headers which include: phone, name, date.');
+  }
+}
+
+/**
+ * Implements hook_form_submit().
+ */
+function hos_scheduler_form_submit($form, &$form_state) {
+  $results = _hos_scheduler_read_csv($form['text_input']['#value'], $form['data_separator']['#value']);
+  dpm($results);
+
+  // If successful, take to content page.
+  // $form_state['redirect'] = '/';
+}
+
+/**
+ * Helper function to read CSV-style data
+ * 
+ * @param string $rawData Raw data from file or formfield to be read.
+ * 
+ * @param string $separator Separator to use in identifying data elements, i.e. commas or pipes.
+ * 
+ * @return array StdClass objects of data items.
+ */
+function _hos_scheduler_read_csv($rawData, $separator) {
+  $results = [];
+  // Arbitrary counter to read header row first.
+  $rowNumber = 1;
+  $headers = [];
+
+  // Import raw string as CSV.
+  // Split into rows.
+  $dataRows = str_getcsv($rawData, "\n");
+  // Read each row.
+  foreach($dataRows as $row) {
+    // Read header row.
+    if($rowNumber == 1) {
+      // Split into cells.
+      $cells = str_getcsv($row, $separator);
+      foreach($cells as $cell) {
+        $headers[] = $cell;
+      }
+      $rowNumber++;
+    }
+    // For data rows.
+    else {
+      // Create item as stdClass object.
+      $object = new stdClass();
+      // Split into cells.
+      $cells = str_getcsv($row, $separator);
+      foreach($cells as $k => $cell) {
+        // Use header as property name.
+        $property = $headers[$k];
+        $object->$property = $cell;
+      }
+
+      $results[] = $object;
+    }
+  }
+
+  return $results;
+}
