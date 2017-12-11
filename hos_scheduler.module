@@ -9,15 +9,109 @@ include_once('lib/posting.class.php');
  */
 function hos_scheduler_menu() {
   $items = [];
-  $items['scheduler/import'] = [
+  // Path to config form for module.
+  $items['admin/config/scheduler'] = [
+    'title' => 'Scheduled Reminders Settings',
+    'description' => 'Module settings for Scheduled Reminders',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['hos_scheduler_config_form'],
+    'access callback' => 'user_has_role',
+    'access arguments' => ['3'],
+  ];
+
+  // Path to form for users to import new data.
+  $items['admin/content/scheduler/import'] = [
     'title' => 'Import scheduled reminders',
     'description' => 'Form to import scheduled reminders and create SMS posts',
     'page callback' => 'drupal_get_form',
     'page arguments' => ['hos_scheduler_form'],
-    'access callback' => TRUE
+    'access callback' => TRUE,
+    // Add the relevant user role here.
+    // 'access arguments' => ['x'],
   ];
 
   return $items;
+}
+
+/**
+ * Create module config form.
+ * 
+ * Implements hook_form().
+ */
+function hos_scheduler_config_form($form, &$form_state) {
+  // Get value from database.
+  $message_text = variable_get('hos_scheduler_message', '');
+
+  $form['message'] = [
+    '#type' => 'html_tag',
+    '#tag' => 'p',
+    '#value' => t('All reminder messages will be sent with the following text. Users can enter a custom text for a batch of messages when the batch is created.'),
+  ];
+
+  $form['message_text'] = [
+    '#title' => t('Text of Scheduled Reminder Messages'),
+    '#description' => t("Enter message text. Use the placeholders '\$date' and '\$provider' to insert the relevant text in the message. <br />Remember this is SMS, so characters are limited. Character count is limited to 120."),
+    '#type' => 'textarea',
+    '#default_value' => $message_text,
+  ];
+
+  $form['message_count'] = [
+    '#type' => 'container',
+    '#attributes' => [
+      'class' => ['active-message-count']
+    ]
+  ];
+
+  $form['message_count']['label'] = [
+    '#type' => 'html_tag',
+    '#tag' => 'span',
+    '#value' => t('Character count: '),
+  ];
+
+  $form['message_count']['count'] = [
+    '#type' => 'html_tag',
+    '#tag' => 'span',
+    '#value' => strlen($message_text),
+    '#attributes' => [
+      'id' => 'activeCharCount'
+    ],
+  ];
+
+  $form['submit_button'] = [
+    '#type' => 'submit',
+    '#value' => t('Save'),
+  ];
+
+  // Add js on this page only.
+  // JS providers dynamic character count.
+  $module_path = drupal_get_path('module', 'hos_scheduler');
+  drupal_add_js($module_path . '/js/scheduler.js', ['scope' => 'footer']);
+
+  return $form;
+}
+
+/**
+ * Implements hook_form_validate().
+ */
+function hos_scheduler_config_form_validate($form, &$form_state) {
+  // Limit all messages to a character count?
+  $text = trim($form['message_text']['#value']);
+
+  if (strlen($text) >= 120) {
+    form_set_error('message_text', 'The message is too long! Please limit to 120 characters.');
+  }
+}
+
+/**
+ * Implements hook_form_submit().
+ */
+function hos_scheduler_config_form_submit($form, &$form_state) {
+  $text = trim($form['message_text']['#value']);
+
+  // Store new message to database.
+  variable_set('hos_scheduler_message', $text);
+  // Show confirmation message.
+  drupal_set_message('Message text is saved', 'status');
 }
 
 /**
@@ -26,9 +120,51 @@ function hos_scheduler_menu() {
  * Implements hook_form().
  */
 function hos_scheduler_form($form, &$form_state) {
+  // Text of outgoing messages.
+  // Get global value from database.
+  $message_text = variable_get('hos_scheduler_message', '');
+
+  // Outgoing message text.
+  $form['message_text'] = [
+    '#type' => 'container'
+  ];
+
+  $form['message_text']['label'] = [
+    '#type' => 'html_tag',
+    '#tag' => 'p',
+    '#value' => t('Each message will have the following text:'),
+  ];
+
+  // Display current value in database.
+  $form['message_text']['global_text'] = [
+    '#type' => 'html_tag',
+    '#tag' => 'p',
+    '#value' => $message_text,
+    '#prefix' => '<em>',
+    '#suffix' => '</em>',
+  ];
+
+  $form['message_text']['custom_text'] = [
+    '#type' => 'fieldset',
+    '#title' => t('Custom message text'),
+    '#collapsible' => TRUE,
+    '#collapsed' => TRUE,
+  ];
+
+  // Form for custom outgoing message text for current batch.
+  $form['message_text']['custom_text']['custom_form'] = [
+    '#title' => t('Message text'),
+    '#description' => t('Each message willl contain this text, along with the provider name, and event date.'),
+    '#type' => 'textarea',
+    '#default_value' => '',
+  ];
+
+  // CSV data input elements.
   $form['text_input'] = [
     '#title' => t('CSV-type Data'),
-    '#description' => t('Paste CSV-style data to create reminders. The first line must contain column headers in order to properly match data. Each entry must be on a new line.'),
+    '#description' => t('Paste CSV-style data to create reminders. The first line must contain column headers in order to properly match data. 
+      Each entry must be on a new line.<br />
+      Dates should be formatted as 2017-07-07 12:15.'),
     '#type' => 'textarea',
     '#default_value' => '',
     '#required' => TRUE,
@@ -45,8 +181,6 @@ function hos_scheduler_form($form, &$form_state) {
     '#empty_option' => '--Select a value--',
     '#required' => TRUE,
   ];
-
-  // $form['file_input'] = [];
 
   $form['submit_button'] = [
     '#type' => 'submit',
@@ -91,11 +225,34 @@ function hos_scheduler_form_validate($form, &$form_state) {
  * Implements hook_form_submit().
  */
 function hos_scheduler_form_submit($form, &$form_state) {
+  // Get CSV data and separator.
   $results = _hos_scheduler_read_csv($form['text_input']['#value'], $form['data_separator']['#value']);
-  
+
+  // Get message text from global setting, or custom message for current batch.
+  $custom_message = trim($form['message_text']['custom_text']['custom_form']['#value']);
+  if ($custom_message == '') {
+    $message_text = variable_get('hos_scheduler_message', '');
+  }
+  else {
+    $message_text = $custom_message;
+  }
+
+  // Collection for current batch of new messages.
+  $new_messages = [];
+
   foreach($results as $result) {
-    $n = new Posting($result);
-    dpm($n->speak());
+    // Create new posting object.
+    $message = new Posting($result);
+    // Add message body.
+    $message->addBody($message_text);
+    // Add to collection.
+    $new_messages[] = $message;
+  }
+  
+  // Do something with collection, i.e. create nodes.
+  foreach($new_messages as $node) {
+    drupal_set_message($node->speak());
+    // dpm($node);
   }
 
   // If successful, take to content page.

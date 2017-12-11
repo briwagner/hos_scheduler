@@ -2,4 +2,5 @@ name = HOS Scheduler
 description = Process appointments and generate reminder posts to individual users
 core = 7.x
 package = HOS
+configure = admin/config/scheduler
 files[] = lib/posting.class.php
